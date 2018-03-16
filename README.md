@@ -12,7 +12,7 @@ arXiv preprint arXiv:1801.07791, 2018.
 We've tested code on MNIST only.
 
 ```python
-python ./download_datasets.py -d mnist
+python ./download_datasets.py -d mnist -f ./
 python ./prepare_mnist_data.py -f ./
 python ./pointcnn.py
 ```

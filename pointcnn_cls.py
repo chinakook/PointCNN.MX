@@ -62,8 +62,8 @@ setting.with_X_transformation = True
 setting.sorting_method = None
 ###################################################################
 
-data_train, label_train, data_val, label_val = data_utils.load_cls_train_val('train_files.txt',
-                            'test_files.txt')
+data_train, label_train, data_val, label_val = data_utils.load_cls_train_val('./mnist/train_files.txt',
+                            './mnist/test_files.txt')
 
 nd_iter = mx.io.NDArrayIter(data={'data': data_train}, label={'softmax_label': label_train}, batch_size=setting.batch_size)
 

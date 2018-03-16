@@ -13,7 +13,7 @@ We've tested code on MNIST only.
 
 ```python
 python ./download_datasets.py -d mnist -f ./
-python ./prepare_mnist_data.py -f ./
+python ./prepare_mnist_data.py -f ./mnist/zips
 python ./pointcnn_cls.py
 ```
 

@@ -61,6 +61,34 @@ setting.data_dim = 3
 setting.with_X_transformation = True
 setting.sorting_method = None
 ###################################################################
+ctx = [mx.gpu(0)]
+net = PointCNN(setting, 'classification', with_feature=False, prefix="PointCNN_")
+net.hybridize()
+
+var = mx.sym.var('data', shape=(64, 256, 3))
+
+probs = net(var)
+probs.save('aaa.json')
+#mx.viz.print_summary(probs, shape={'data':(64, 256, 3)} ) # viz dense flattern bug
+
+arg_shapes, _, aux_shapes = probs.infer_shape(data=(64, 256, 3))
+arg_names = probs.list_arguments()
+aux_names = probs.list_auxiliary_states()
+arg_shape_dic = dict(zip(arg_names, arg_shapes))
+aux_shape_dic = dict(zip(aux_names, aux_shapes))
+
+
+total_dense = 0
+total = 0
+for k, v in arg_shape_dic.items():
+    total += np.prod(v)
+    if k.count("dense") > 0:
+        total_dense += np.prod(v)
+    print (k,'\t',v)
+
+for b in aux_shapes:
+    total += np.prod(b)
+print (total, total_dense)
 
 data_train, label_train, data_val, label_val = data_utils.load_cls_train_val('./mnist/train_files.txt',
                             './mnist/test_files.txt')
@@ -75,9 +103,7 @@ batch_num_per_epoch = int(math.ceil(num_train / setting.batch_size))
 batch_num = batch_num_per_epoch * setting.num_epochs
 batch_size_train = setting.batch_size
 
-ctx = [mx.gpu(0)]
-net = PointCNN(setting, 'classification', with_feature=False, prefix="PointCNN_")
-net.hybridize()
+
 
 sym_max_points = point_num
 
@@ -88,6 +114,8 @@ probs_shape = get_shape(probs)
 label_var = mx.sym.var('softmax_label', shape=(batch_size_train // len(ctx), probs_shape[1]))
 
 loss = get_loss_sym(probs, label_var)
+
+
 
 mod = mx.mod.Module(loss, data_names=['data'], label_names=['softmax_label'], context=ctx)
 mod.bind(data_shapes=[('data',(batch_size_train, sym_max_points, 3))]

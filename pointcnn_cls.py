@@ -81,13 +81,15 @@ aux_shape_dic = dict(zip(aux_names, aux_shapes))
 total_dense = 0
 total = 0
 for k, v in arg_shape_dic.items():
+    if k == 'data' or k.count("batchnorm") > 0:
+        continue
     total += np.prod(v)
     if k.count("dense") > 0:
         total_dense += np.prod(v)
     print (k,'\t',v)
 
-for b in aux_shapes:
-    total += np.prod(b)
+#for b in aux_shapes:
+#    total += np.prod(b)
 print (total, total_dense)
 
 data_train, label_train, data_val, label_val = data_utils.load_cls_train_val('./mnist/train_files.txt',

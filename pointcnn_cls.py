@@ -29,7 +29,7 @@ setting.num_class = 10
 
 setting.sample_num = 160
 
-setting.batch_size = 32
+setting.batch_size = 256
 
 setting.num_epochs = 2048
 
@@ -68,7 +68,7 @@ net.hybridize()
 var = mx.sym.var('data', shape=(64, 256, 3))
 
 probs = net(var)
-probs.save('aaa.json')
+#probs.save('aaa.json')
 #mx.viz.print_summary(probs, shape={'data':(64, 256, 3)} ) # viz dense flattern bug
 
 arg_shapes, _, aux_shapes = probs.infer_shape(data=(64, 256, 3))
@@ -97,6 +97,8 @@ data_train, label_train, data_val, label_val = data_utils.load_cls_train_val('./
 
 nd_iter = mx.io.NDArrayIter(data={'data': data_train}, label={'softmax_label': label_train}, batch_size=setting.batch_size)
 
+nd_iter_val = mx.io.NDArrayIter(data={'data': data_val}, label={'softmax_label': label_val}, batch_size=setting.batch_size)
+
 
 num_train = data_train.shape[0]
 point_num = data_train.shape[1]
@@ -105,7 +107,8 @@ batch_num_per_epoch = int(math.ceil(num_train / setting.batch_size))
 batch_num = batch_num_per_epoch * setting.num_epochs
 batch_size_train = setting.batch_size
 
-
+num_val = data_val.shape[0]
+batch_num_val = math.floor(num_val / setting.batch_size)
 
 sym_max_points = point_num
 
@@ -176,3 +179,41 @@ for i in range(400):
         t1 = time.time()
         print(ibatch, t1-t0 , value)
 
+    var = mx.sym.var('data', shape=(setting.batch_size // len(ctx), setting.sample_num, 3))
+    probs = net(var)
+    #loss = get_loss_sym(probs, label_var)
+    
+    mod._symbol = probs
+    mod.binded=False
+    mod.bind(data_shapes=[('data',(setting.batch_size, setting.sample_num, 3))]
+                , label_shapes=None, shared_module=mod)
+
+    nd_iter_val.reset()
+    for ibval, batch_val in enumerate(nd_iter_val):
+        label = batch_val.label[0]
+        labels_2d = nd.expand_dims(label,axis=-1)
+        pts_fts = batch_val.data[0]
+        bs = pts_fts.shape[0]
+        points2 = nd.slice(pts_fts, begin=(0,0,0), end= (None, None, 3))
+        #features2 = nd.slice(pts_fts, begin=(0,0,3), end= (None, None, None))
+
+        indices = get_indices(batch_size_train, setting.sample_num, point_num)
+        indices_nd = nd.array(indices, dtype=np.int32)
+        points_sampled = nd.gather_nd(points2, indices=indices_nd)
+        #features_sampled = nd.gather_nd(features2, indices=nd.transpose(indices_nd, (2, 0, 1)))
+
+        xforms_np, rotations_np = get_xforms(batch_size_train, rotation_range=setting.rotation_range, order=setting.order)
+        points_xformed = nd.batch_dot(points_sampled, nd.array(xforms_np), name='points_xformed')
+        points_augmented = augment(points_sampled, nd.array(xforms_np), setting.jitter)
+        features_augmented = None
+
+        nb = mx.io.DataBatch(data=[points_sampled], label=None, pad=nd_iter_val.getpad(), index=None)
+
+        mod.forward(nb, is_train=False)
+
+        pred = mod.get_outputs()[0]
+        pred_mean = nd.mean(pred, axis=1, keepdims=True)
+
+        value = custom_metric(labels_2d, pred_mean)
+
+        print(ibval, value)

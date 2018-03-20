@@ -181,7 +181,6 @@ for i in range(400):
 
     var = mx.sym.var('data', shape=(setting.batch_size // len(ctx), setting.sample_num, 3))
     probs = net(var)
-    #loss = get_loss_sym(probs, label_var)
     
     mod._symbol = probs
     mod.binded=False

@@ -162,7 +162,7 @@ class SepCONV(nn.HybridBlock):
         self.net = nn.HybridSequential()
         self.net.add(
             nn.Conv2D(channels=int(inp*depth_multiplier), groups=int(inp), kernel_size=kernel_size, strides=(1,1), use_bias=True),
-            nn.Conv2D(channels=output, kernel_size=(1,1), strides=(1,1), use_bias=False if with_bn else True)
+            nn.Conv2D(channels=output, kernel_size=(1,1), strides=(1,1), use_bias=not with_bn)
         )
         self.act = activation
         self.with_bn = with_bn
@@ -183,7 +183,7 @@ class SepCONV(nn.HybridBlock):
 class CONV(nn.HybridBlock):
     def __init__(self, output, kernel_size, with_bn=True, activation='elu'):
         super(CONV, self).__init__()
-        self.net = nn.Conv2D(channels=output, kernel_size=kernel_size, strides=(1,1), use_bias=False if with_bn else True)
+        self.net = nn.Conv2D(channels=output, kernel_size=kernel_size, strides=(1,1), use_bias=not with_bn)
         self.act = activation
         self.with_bn = with_bn
         if activation is not None:
@@ -203,14 +203,14 @@ class CONV(nn.HybridBlock):
 class DENSE(nn.HybridBlock):
     def __init__(self, output, drop_rate=0, with_bn=True, activation='elu'):
         super(DENSE, self).__init__()
-        self.net = nn.Dense(units=output, flatten=False, use_bias=True)
+        self.net = nn.Dense(units=output, flatten=False, use_bias=not with_bn)
         self.act = activation
         self.with_bn = with_bn
         self.drop_rate = drop_rate
         if activation is not None:
             self.elu = nn.ELU()
-        #if with_bn:
-        #    self.bn = nn.BatchNorm(axis=1, use_global_stats=False)
+        if with_bn:
+            self.bn = nn.BatchNorm(axis=1, use_global_stats=False)
         if drop_rate > 0:
             self.drop = nn.Dropout(drop_rate)
     def hybrid_forward(self, F ,x):
@@ -218,10 +218,11 @@ class DENSE(nn.HybridBlock):
         x = self.net(x)
         if self.act is not None:
             x = self.elu(x)
-        #if self.with_bn:
-        #    x = F.transpose(x, axes=(0,2,1))
-        #    x = self.bn(x)
-        #    x = F.transpose(x, axes=(0,2,1))
+        if self.with_bn:
+            xl = len(get_shape(x))
+            x = F.transpose(x, axes=(0,2,1)) if xl==3 else F.transpose(x, axes=(0,3,1,2))
+            x = self.bn(x)
+            x = F.transpose(x, axes=(0,2,1)) if xl==3 else F.transpose(x, axes=(0,2,3,1))
         if self.drop_rate > 0:
             x = self.drop(x)
         

@@ -13,32 +13,30 @@ import sys
 import mxnet as mx
 from mxnet import nd
 import mxnet.gluon as gluon
-from mxutils import get_shape
-
-from pointcnn import PointCNN, get_indices, get_xforms, augment, custom_metric, get_loss_sym
 
 from dotdict import DotDict
 import h5py
 import collections
 import data_utils
 
+from mxutils import get_shape
+from sampleiter import SampleIter
+from pointcnn import PointCNN, custom_metric
+
+
+
+from kktools.utils import statparams
+
 ########################### Settings ###############################
 setting = DotDict()
 
 setting.num_class = 8
 
-setting.sample_num = 2048
+setting.sample_num = 4096
 
-setting.batch_size = 4
+setting.batch_size = 12
 
 setting.num_epochs = 1024
-
-setting.learning_rate_base = 0.001
-setting.decay_steps = 20000
-setting.decay_rate = 0.9
-setting.learning_rate_min = 1e-6
-
-setting.weight_decay = 0.0
 
 setting.jitter = 0.001
 setting.jitter_val = 0.0
@@ -60,9 +58,11 @@ setting.xconv_params = [(8, 1, -1, 32 * x),
                 (16, 6, 128, 128 * x)]
 
 # K, D, pts_layer_idx, qrs_layer_idx
-setting.xdconv_params = [(16, 6, 3, 2),
-                 (12, 4, 2, 1),
-                 (8, 4, 1, 0)]
+setting.xdconv_params =  [(16, 6, 3, 2),
+                 (12, 6, 2, 1),
+                 (8, 6, 1, 0),
+                 (8, 4, 0, 0)]
+
 
 # C, dropout_rate
 setting.fc_params = [(32 * x, 0.5), (32 * x, 0.5)]
@@ -81,47 +81,77 @@ setting.sorting_method = None
 setting.keep_remainder = True
 ###################################################################
 
-data_train, _ , data_num_train, label_train = data_utils.load_seg('/train_files.txt')
-data_val, _ , data_num_val, label_val = data_utils.load_seg('/train_files.txt')
+#data_train, _ , data_num_train, label_train = data_utils.load_seg('/train_files.txt')
+#data_val, _ , data_num_val, label_val = data_utils.load_seg('/train_files.txt')
+data_train, _ , data_num_train, label_train = data_utils.load_seg('/mnt/15F1B72E1A7798FD/Dataset/point_cnn/label_las/train/split_h5/train_files.txt')
+data_val, _ , data_num_val, label_val = data_utils.load_seg('/mnt/15F1B72E1A7798FD/Dataset/point_cnn/label_las/val/split_h5/train_files.txt')
 
-nd_iter = mx.io.NDArrayIter(data={'data': data_train}, label={'softmax_label': label_train}, batch_size=setting.batch_size)
-nd_iter_val = mx.io.NDArrayIter(data={'data': data_val}, label={'softmax_label': label_val}, batch_size=setting.batch_size)
+nd_iter = SampleIter(setting=setting, data=data_train, label=label_train, data_pad=data_num_train, batch_size=setting.batch_size, shuffle=True)
+nd_iter_val = SampleIter(setting=setting, data=data_val, label=label_val, data_pad=data_num_val, batch_size=setting.batch_size)
 
+# for batch in nd_iter:
+#     print(batch)
 
 num_train = data_train.shape[0]
 point_num = data_train.shape[1]
 
 num_val = data_val.shape[0]
-val_point_num = data_val.shape[1]
+
 
 batch_num_per_epoch = int(math.ceil(num_train / setting.batch_size))
 batch_num = batch_num_per_epoch * setting.num_epochs
 batch_size_train = setting.batch_size
 
-ctx = [mx.gpu(1)]
-net = PointCNN(setting, 'segmentation', with_feature=False, prefix="PointCNN_")
+ctx = [mx.gpu(0), mx.gpu(1), mx.gpu(2), mx.gpu(3)]
+net = PointCNN(setting, 'segmentation', with_feature=False, prefix="")
 net.hybridize()
 
-sym_max_points = setting.sample_num
+sym_max_points = max(data_train.shape[1], data_val.shape[1])
 
 var = mx.sym.var('data', shape=(batch_size_train // len(ctx), sym_max_points, 3))
 probs = net(var)
 
 probs_shape = get_shape(probs)
 label_var = mx.sym.var('softmax_label', shape=(batch_size_train // len(ctx), probs_shape[1]))
+loss = mx.sym.SoftmaxOutput(probs, label_var, preserve_shape=True, normalization='valid')
 
-loss = get_loss_sym(probs, label_var)
+# paramscount = statparams(loss, data=(batch_size_train // len(ctx), sym_max_points, 3)
+#     , softmax_label = (batch_size_train // len(ctx), probs_shape[1]))
+# print(paramscount)
+
+#mx.viz.print_summary(probs, shape={'data':(batch_size_train // len(ctx), sym_max_points, 3)})
+#mx.viz.plot_network(probs).view()
 
 mod = mx.mod.Module(loss, data_names=['data'], label_names=['softmax_label'], context=ctx)
 mod.bind(data_shapes=[('data',(batch_size_train, sym_max_points, 3))]
          , label_shapes=[('softmax_label',(batch_size_train, probs_shape[1]))])
 
-mod.init_params(initializer=mx.init.Xavier(magnitude=2.))
-mod.init_optimizer(optimizer='sgd', optimizer_params={'learning_rate':0.01, 'momentum': 0.9})
+mod.init_params(initializer=mx.init.Uniform())
+
+lr_sched = mx.lr_scheduler.MultiFactorScheduler([100, 200, 300, 400, 500, 600, 700, 800], 0.33)
+mod.init_optimizer(optimizer='sgd', optimizer_params={'learning_rate':0.2 , 'momentum': 0.9
+    , 'wd' : 0.0001, 'lr_scheduler': lr_sched, 'clip_gradient': None})#, 'rescale_grad': 1.0 / len(ctx) if len(ctx) > 0 else 1.0})
+
+def reshape_mod(mod, shape, ctx):
+    var = mx.sym.var('data', shape=(shape[0] // len(ctx), shape[1], shape[2]))
+    probs = net(var)
+    probs_shape = get_shape(probs)
+    label_var = mx.sym.var('softmax_label', shape=(shape[0] // len(ctx), probs_shape[1]))
+
+    loss = mx.sym.SoftmaxOutput(probs, label_var, preserve_shape=True, normalization='valid')
+
+    mod._symbol = loss
+    mod.binded=False
+
+    mod.bind(data_shapes=[('data', shape)]
+                , label_shapes=[('softmax_label',(batch_size_train, probs_shape[1]))], shared_module=mod
+            )
+    return mod
 
 def val_batch(mod,nd_iter_val,setting):
     num_val = (nd_iter_val.data[0][1]).shape[0]
     total_val = 0.0
+    val_point_num = data_val.shape[1]
     iter_size = int(math.ceil(val_point_num*1.0/setting.sample_num))
     
     var = mx.sym.var('data', shape=(iter_size//len(ctx), setting.sample_num, 3))
@@ -182,64 +212,33 @@ def val_batch(mod,nd_iter_val,setting):
 
 #profiler.set_state('run')
 iter_num = 0
-for i in range(5):
+for i in range(50):
     nd_iter.reset()
     for ibatch, batch in enumerate(nd_iter):
         t0 = time.time()
 
+        points = batch.data[0]
         label = batch.label[0]
 
-        pts_fts = batch.data[0]
-        
-        points2 = nd.slice(pts_fts, begin=(0,0,0), end= (None, None, 3))
-        #features2 = nd.slice(pts_fts, begin=(0,0,3), end= (None, None, None))
+        nb = mx.io.DataBatch(data=[points], label=[label], pad=nd_iter.getpad(), index=None)
 
-        offset = int(random.gauss(0, setting.sample_num // 8))
-        offset = max(offset, -setting.sample_num // 4)
-        offset = min(offset, setting.sample_num // 4)
-        sample_num_train = setting.sample_num + offset
-
-        indices = get_indices(batch_size_train, sample_num_train, point_num)
-        indices_nd = nd.array(indices, dtype=np.int32)
-        points_sampled = nd.gather_nd(points2, indices=indices_nd)
-        labels_sampled = nd.gather_nd(label, indices=indices_nd)
-        
-        #features_sampled = nd.gather_nd(features2, indices=nd.transpose(indices_nd, (2, 0, 1)))
-
-        #xforms_np, rotations_np = get_xforms(batch_size_train, rotation_range=setting.rotation_range, order=setting.order)
-        #points_xformed = nd.batch_dot(points_sampled, nd.array(xforms_np), name='points_xformed')
-        #points_augmented = augment(points_sampled, nd.array(xforms_np), setting.jitter)
-        features_augmented = None
-
-        #print points_sampled.shape, labels_sampled.shape
-        nb = mx.io.DataBatch(data=[points_sampled], label=[labels_sampled], pad=nd_iter.getpad(), index=None)
-        #print(nb)
-
-        var = mx.sym.var('data', shape=(batch_size_train // len(ctx), sample_num_train, 3))
-        probs = net(var)
-        probs_shape = get_shape(probs)
-        res = get_loss_sym(probs, label_var)
-
-        mod._symbol = res
-        mod.binded=False
-
-        mod.bind(data_shapes=[('data',(batch_size_train, sample_num_train,3))]
-                 , label_shapes=[('softmax_label',(batch_size_train, probs_shape[1]))], shared_module=mod
-                )
+        mod = reshape_mod(mod, (batch_size_train, points.shape[1], 3), ctx)
 
         mod.forward(nb, is_train=True)
         #mod.update_metric(metric1, nb.label)
-        #print nb.label[0].shape
-        value = custom_metric(nb.label[0], mod.get_outputs()[0])
+        value = custom_metric(label, mod.get_outputs()[0])
         
         mod.backward()
         mod.update()
         #name, value = metric1.get()
         t1 = time.time()
-        print("iter_num: ",iter_num,  "val: " ,value)
+        print("iter: ",iter_num,  "acc: " ,value, "time: ", t1 - t0)
         iter_num = iter_num + 1
-    if(((i+1)%5 == 0) and (i > 0)):
-        mean_acc = val_batch(mod,nd_iter_val, setting )
-        print("Epoch %d: val_mean_acc  %f" %(i,mean_acc))
+    # if(((i+1)%5 == 0) and (i > 0)):
+    #     mean_acc = val_batch(mod,nd_iter_val, setting )
+    #     print("Epoch %d: val_mean_acc  %f" %(i,mean_acc))
 
-mod.save_checkpoint("p_seg",400)
+
+mod = reshape_mod(mod, (1, setting.sample_num, 3), [mx.gpu(0)])
+
+mod.save_checkpoint("p_seg", 400)

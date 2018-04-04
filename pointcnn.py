@@ -5,7 +5,7 @@ import numpy as np
 import math
 import random
 
-from transforms3d.euler import euler2mat
+
 
 import mxnet as mx
 from mxnet import nd
@@ -16,80 +16,6 @@ from mxnet.gluon.data import Dataset, DataLoader
 
 from mxutils import MyConstant, get_shape
 from fpsop import *
-
-# the returned indices will be used by gather_nd
-def get_indices(batch_size, sample_num, point_num, random_sample=True):
-    if not isinstance(point_num, np.ndarray):
-        point_nums = np.full((batch_size), point_num)
-    else:
-        point_nums = point_num
-
-    indices = []
-    for i in range(batch_size):
-        pt_num = point_nums[i]
-        if random_sample:
-            choices = np.random.choice(pt_num, sample_num, replace=(pt_num < sample_num))
-        else:
-            choices = np.arange(sample_num) % pt_num
-        choices = np.expand_dims(choices, axis=0)
-        choices_2d = np.concatenate((np.full_like(choices, i), choices), axis=0)
-        indices.append(choices_2d)
-    return np.stack(indices, axis=1)
-
-def gauss_clip(mu, sigma, clip):
-    v = random.gauss(mu, sigma)
-    v = max(min(v, mu + clip * sigma), mu - clip * sigma)
-    return v
-
-def uniform(bound):
-    return bound * (2 * random.random() - 1)
-
-def scaling_factor(scaling_param, method):
-    try:
-        scaling_list = list(scaling_param)
-        return random.choice(scaling_list)
-    except:
-        if method == 'g':
-            return gauss_clip(1.0, scaling_param, 3)
-        elif method == 'u':
-            return 1.0 + uniform(scaling_param)
-
-def rotation_angle(rotation_param, method):
-    try:
-        rotation_list = list(rotation_param)
-        return random.choice(rotation_list)
-    except:
-        if method == 'g':
-            return gauss_clip(0.0, rotation_param, 3)
-        elif method == 'u':
-            return uniform(rotation_param)
-
-def get_xforms(xform_num, rotation_range=(0, 0, 0, 'u'), scaling_range=(0.0, 0.0, 0.0, 'u'), order='rxyz'):
-    xforms = np.empty(shape=(xform_num, 3, 3))
-    rotations = np.empty(shape=(xform_num, 3, 3))
-    for i in range(xform_num):
-        rx = rotation_angle(rotation_range[0], rotation_range[3])
-        ry = rotation_angle(rotation_range[1], rotation_range[3])
-        rz = rotation_angle(rotation_range[2], rotation_range[3])
-        rotation = euler2mat(rx, ry, rz, order)
-
-        sx = scaling_factor(scaling_range[0], scaling_range[3])
-        sy = scaling_factor(scaling_range[1], scaling_range[3])
-        sz = scaling_factor(scaling_range[2], scaling_range[3])
-        scaling = np.diag([sx, sy, sz])
-
-        xforms[i, :] = scaling * rotation
-        rotations[i, :] = rotation
-    return xforms, rotations
-
-def augment(points, xforms, r=None):
-    points_xformed = nd.batch_dot(points, xforms, name='points_xformed')
-    if r is None:
-        return points_xformed
-
-    jitter_data = r * mx.random.normal(shape=points_xformed.shape)
-    jitter_clipped = nd.clip(jitter_data, -5 * r, 5 * r, name='jitter_clipped')
-    return points_xformed + jitter_clipped
 
 # a b c
 # d e f
@@ -156,59 +82,61 @@ class BN(nn.HybridBlock):
         return x
     
 class SepCONV(nn.HybridBlock):
-    def __init__(self, inp, output, kernel_size, depth_multiplier=1, with_bn=True, activation='elu'):
-        super(SepCONV, self).__init__()
+    def __init__(self, inp, output, kernel_size, depth_multiplier=1, with_bn=True, activation=nn.PReLU(), **kwargs):
+        super(SepCONV, self).__init__(**kwargs)
+        with self.name_scope():
+            self.net = nn.HybridSequential()
+            cn = int(inp*depth_multiplier)
 
-        self.net = nn.HybridSequential()
-        self.net.add(
-            nn.Conv2D(channels=int(inp*depth_multiplier), groups=int(inp), kernel_size=kernel_size, strides=(1,1), use_bias=True),
-            nn.Conv2D(channels=output, kernel_size=(1,1), strides=(1,1), use_bias=not with_bn)
-        )
-        self.act = activation
-        self.with_bn = with_bn
-        if activation is not None:
-            self.elu = nn.ELU()
-        if with_bn:
-            self.bn = nn.BatchNorm(axis=1, use_global_stats=False)
+            if output is None:
+                self.net.add(
+                    nn.Conv2D(in_channels=inp, channels=cn, groups=inp, kernel_size=kernel_size, strides=(1,1), use_bias=not with_bn)
+                )
+            else:
+                self.net.add(
+                    nn.Conv2D(in_channels=inp, channels=cn, groups=inp, kernel_size=kernel_size, strides=(1,1), use_bias=True),
+                    nn.Conv2D(in_channels=cn, channels=output, kernel_size=(1,1), strides=(1,1), use_bias=not with_bn)
+                )
+
+            self.with_bn = with_bn
+            self.act = activation
+            if with_bn:
+                self.bn = nn.BatchNorm(axis=1, use_global_stats=False)
     def hybrid_forward(self, F ,x):
         x = F.transpose(x, axes=(0,3,1,2))
         x = self.net(x)
-        if self.act is not None:
-            x = self.elu(x)
         if self.with_bn:
             x = self.bn(x)
+        if self.act is not None:
+            x = self.act(x)
         x = F.transpose(x, axes=(0,2,3,1))
         return x
 
 class CONV(nn.HybridBlock):
-    def __init__(self, output, kernel_size, with_bn=True, activation='elu'):
-        super(CONV, self).__init__()
+    def __init__(self, output, kernel_size, with_bn=True, activation=nn.PReLU(), **kwargs):
+        super(CONV, self).__init__(**kwargs)
         self.net = nn.Conv2D(channels=output, kernel_size=kernel_size, strides=(1,1), use_bias=not with_bn)
-        self.act = activation
         self.with_bn = with_bn
-        if activation is not None:
-            self.elu = nn.ELU()
+        self.act = activation
         if with_bn:
             self.bn = nn.BatchNorm(axis=1, use_global_stats=False)
     def hybrid_forward(self, F ,x):
         x = F.transpose(x, axes=(0,3,1,2))
         x = self.net(x)
-        if self.act is not None:
-            x = self.elu(x)
         if self.with_bn:
             x = self.bn(x)
+        if self.act is not None:
+            x = self.act(x)
         x = F.transpose(x, axes=(0,2,3,1))
         return x        
 
 class DENSE(nn.HybridBlock):
-    def __init__(self, output, drop_rate=0, with_bn=True, activation='elu'):
+    def __init__(self, output, drop_rate=0, with_bn=True, activation=nn.PReLU()):
         super(DENSE, self).__init__()
         self.net = nn.Dense(units=output, flatten=False, use_bias=not with_bn)
-        self.act = activation
         self.with_bn = with_bn
+        self.act = activation
         self.drop_rate = drop_rate
-        if activation is not None:
-            self.elu = nn.ELU()
         if with_bn:
             self.bn = nn.BatchNorm(axis=1, use_global_stats=False)
         if drop_rate > 0:
@@ -216,13 +144,13 @@ class DENSE(nn.HybridBlock):
     def hybrid_forward(self, F ,x):
         
         x = self.net(x)
-        if self.act is not None:
-            x = self.elu(x)
         if self.with_bn:
             xl = len(get_shape(x))
             x = F.transpose(x, axes=(0,2,1)) if xl==3 else F.transpose(x, axes=(0,3,1,2))
             x = self.bn(x)
             x = F.transpose(x, axes=(0,2,1)) if xl==3 else F.transpose(x, axes=(0,2,3,1))
+        if self.act is not None:
+            x = self.act(x)
         if self.drop_rate > 0:
             x = self.drop(x)
         
@@ -267,13 +195,14 @@ class knn_indices(nn.HybridBlock):
         super(knn_indices, self).__init__()
         self.k = k
         self.sort = sort
-        self.batch_distance_matrix = batch_distance_matrix()
+        with self.name_scope():
+            self.bdm = batch_distance_matrix()
     def hybrid_forward(self, F, points):
         points_shape = get_shape(points)
         batch_size = points_shape[0]
         point_num = points_shape[1]
 
-        D = self.batch_distance_matrix(points)
+        D = self.bdm(points)
 
         sorttype = False if self.sort else None
         point_indices = F.topk(-D, axis=-1, k=self.k, ret_typ='indices', is_ascend=sorttype)
@@ -287,13 +216,14 @@ class knn_indices_general(nn.HybridBlock):
         super(knn_indices_general, self).__init__()
         self.k = k
         self.sort = sort
-        self.batch_distance_matrix_general = batch_distance_matrix_general()
+        with self.name_scope():
+            self.bdmg = batch_distance_matrix_general()
     def hybrid_forward(self, F, queries, points):
         queries_shape = get_shape(queries)
         batch_size = queries_shape[0]
         point_num = queries_shape[1]
 
-        D = self.batch_distance_matrix_general(queries, points)
+        D = self.bdmg(queries, points)
 
         sorttype = False if self.sort else True
         point_indices = F.topk(-D, axis=-1, k=self.k, ret_typ='indices', is_ascend=sorttype)  # (N, P, K)
@@ -333,7 +263,7 @@ class sort_points(nn.HybridBlock):
             nn_pts_min = F.min(nn_pts, axis=2, keepdims=True)
             nn_pts_max = F.max(nn_pts, axis=2, keepdims=True)
             nn_pts_normalized = (nn_pts - nn_pts_min) / (nn_pts_max - nn_pts_min + self.epsilon)  # (N, P, K, 3)
-            scaling_const = F.Variable('scaling_factors', shape=(1,3), init=MyConstant(scaling_factors))
+            scaling_const = F.Variable('scaling_factors', shape=(1,3), init=MyConstant(self.scaling_factors))
             scaling_const = F.BlockGrad(scaling_const)
             scaling = F.reshape(scaling_const, (1,1,1,3))
             sorting_data = F.sum(nn_pts_normalized * scaling, axis=-1, keepdims=False)  # (N, P, K)
@@ -360,7 +290,7 @@ def top_1_accuracy(probs, labels, weights=None,is_partial=None, num=None):
 
     #ignore zero weight class
     if W is not None:
-        hold_indices = np.greater(W, nd.zeros_like(W))
+        hold_indices = np.greater(W, np.zeros_like(W))
         probs = P[hold_indices]
         labels = L[hold_indices]
 
@@ -386,9 +316,9 @@ class xconv(nn.HybridBlock):
         self.sorting_method = sorting_method
         with self.name_scope():
             if self.D == 1:
-                self.knn_indices_general = knn_indices_general(self.K, False)
+                self.kig = knn_indices_general(self.K, False)
             else:
-                self.knn_indices_general = knn_indices_general(self.K * self.D, True)
+                self.kig = knn_indices_general(self.K * self.D, True)
             if self.sorting_method is not None:
                 self.sort_points = sort_points(self.sorting_method)
             self.fts_from_pts = nn.HybridSequential()
@@ -397,21 +327,26 @@ class xconv(nn.HybridBlock):
                 DENSE(C_pts_fts),
                 DENSE(C_pts_fts)
             )
-
-            self.x_trans = nn.HybridSequential()
-            self.x_trans.add(
-                CONV(K*K, (1, K), with_bn=False),
-                DENSE(K*K, with_bn=False),
-                DENSE(K*K, with_bn=False, activation=None)
-            )
+            if self.with_X_transformation:
+                # self.trans0 = CONV(K*K, (1, K))
+                # self.trans1 = SepCONV(K, output=None, kernel_size=(1,K), depth_multiplier=K)
+                # self.trans2 = SepCONV(K, output=None, kernel_size=(1,K), depth_multiplier=K)
+                self.x_trans = nn.HybridSequential()
+                self.x_trans.add(
+                    CONV(K*K, (1, K), with_bn=False),
+                    DENSE(K*K, with_bn=False),
+                    DENSE(K*K, with_bn=False, activation=None)
+                )
             
-            self.sconv0 = SepCONV(C_pts_fts+C_prev, C, (1,K), depth_multiplier)
+            #self.sconv0 = CONV(C, (1,K))
+            self.sconv0 = SepCONV(C_pts_fts+C_prev, C, (1,K), depth_multiplier, prefix="fts_")
         
     def hybrid_forward(self, F, pts, fts, qrs):
+        #print(get_shape(pts), get_shape(qrs))
         if self.D == 1:
-            indices = self.knn_indices_general(qrs, pts)
+            indices = self.kig(qrs, pts)
         else:
-            indices_dilated = self.knn_indices_general(qrs, pts)
+            indices_dilated = self.kig(qrs, pts)
             indices = F.slice(indices_dilated, begin=(0,0,0,0), end=(None,None,None,None), step=(None,None,None,self.D))
 
         P = get_shape(qrs)[1] if self.P == -1 else self.P
@@ -436,6 +371,12 @@ class xconv(nn.HybridBlock):
             ######################## X-transformation #########################
             X_2 = self.x_trans(nn_pts_local_bn)
             X = F.reshape(X_2, (-1, P, self.K, self.K))
+            # X_0 = self.trans0(nn_pts_local_bn)
+            # X_0_KK = F.reshape(X_0, (-1, P, self.K, self.K))
+            # X_1 = self.trans1(X_0_KK)
+            # X_1_KK = F.reshape(X_1, (-1, P, self.K, self.K))
+            # X_2 = self.trans2(X_1_KK)
+            # X_2_KK = F.reshape(X_2, (-1, P, self.K, self.K))
             fts_X = F.linalg.gemm2(X, nn_fts_input)
             ###################################################################
         else:
@@ -460,7 +401,7 @@ class PointCNN(nn.HybridBlock):
             if with_feature:
                 C_fts = self.xconv_params[0][-1] // 2
                 self.dense0 = DENSE(C_fts)
-            self.xconvs = nn.HybridSequential()
+            self.xconvs = nn.HybridBlock()
             for layer_idx, layer_param in enumerate(self.xconv_params):
                 K, D, P, C = layer_param
 
@@ -473,12 +414,12 @@ class PointCNN(nn.HybridBlock):
                     C_pts_fts = C_prev // 4
                     depth_multiplier = math.ceil(C / C_prev)
                 xc = xconv(K, D, P, C, C_pts_fts, C_prev, self.with_X_transformation,
-                           depth_multiplier, self.sorting_method, prefix="xconv{}_".format(layer_idx) )
-                self.xconvs.add(xc)
+                           depth_multiplier, self.sorting_method, prefix="xconv{}_".format(layer_idx+1) )
+                self.xconvs.register_child(xc)
                 
             if self.task == 'segmentation':
-                self.xdconvs = nn.HybridSequential()
-                self.fuse_fcs = nn.HybridSequential()
+                self.xdconvs = nn.HybridBlock()
+                self.fuse_fcs = nn.HybridBlock(prefix="fts_fuse_")
                 for layer_idx, layer_param in enumerate(self.xdconv_params):
                     K, D, pts_layer_idx, qrs_layer_idx = layer_param
 
@@ -487,16 +428,18 @@ class PointCNN(nn.HybridBlock):
                     C_pts_fts = C_prev // 4
                     depth_multiplier = 1
                     xdc = xconv(K, D, P, C, C_pts_fts, C_prev, self.with_X_transformation,
-                                depth_multiplier, self.sorting_method, prefix="xdconv{}_".format(layer_idx) )
-                    self.xdconvs.add(xdc)
-                    self.fuse_fcs.add(DENSE(C))
+                                depth_multiplier, self.sorting_method, prefix="xdconv{}_".format(layer_idx+1) )
+                    self.xdconvs.register_child(xdc)
+                    with self.fuse_fcs.name_scope():
+                        self.fuse_fcs.register_child(DENSE(C))
 
-            self.fcs = nn.HybridSequential()       
-            for layer_idx, layer_param in enumerate(self.fc_params):
-                channel_num, drop_rate = layer_param
-                self.fcs.add(DENSE(channel_num, drop_rate))
-
-            self.fcs.add(DENSE(self.num_class, with_bn=False, activation=None))
+            self.fcs = nn.HybridSequential(prefix="fc_")
+            with self.fcs.name_scope():       
+                for layer_idx, layer_param in enumerate(self.fc_params):
+                    channel_num, drop_rate = layer_param
+                    self.fcs.add(DENSE(channel_num, drop_rate))
+            with self.fcs.name_scope(): 
+                self.fcs.add(DENSE(self.num_class, with_bn=False, activation=None))
         
     def hybrid_forward(self, F, points, features=None):
         layer_pts = [points]
@@ -508,17 +451,17 @@ class PointCNN(nn.HybridBlock):
             P = layer_param[2]
             pts = layer_pts[-1]
             fts = layer_fts[-1]
-            if P == -1:
-                qrs = points
+            if P == -1 or (layer_idx > 0 and P == self.xconv_params[layer_idx-1][2]):
+                qrs = layer_pts[-1]
             else:
                 if self.with_fps:
-                    tmp = F.Custom(pts, name='fps{}_'.format(layer_idx), op_type='FarthestPointSampling', npoints=P)
-                    qrs = F.Custom(*[pts, tmp], name='gather{}_'.format(layer_idx), op_type='GatherPoint')
+                    idx = F.Custom(pts, op_type='FarthestPointSampling', npoints=P)
+                    qrs = F.Custom(*[pts, idx], op_type='GatherPoint')
                 else:
-                    qrs = F.slice(pts, (0, 0, 0), (None, P, None))  # (N, P, 3)
+                    qrs = F.slice(pts, begin=(0, 0, 0), end=(None, P, None))  # (N, P, 3)
             layer_pts.append(qrs)
-
-            fts_xconv = self.xconvs[layer_idx](pts, fts, qrs)
+            
+            fts_xconv = self.xconvs._children[layer_idx](pts, fts, qrs)
             layer_fts.append(fts_xconv)
             
         if self.task == 'segmentation':
@@ -529,20 +472,75 @@ class PointCNN(nn.HybridBlock):
                 fts = layer_fts[pts_layer_idx + 1] if layer_idx == 0 else layer_fts[-1]
                 qrs = layer_pts[qrs_layer_idx + 1]
                 fts_qrs = layer_fts[qrs_layer_idx + 1]
-                
-                fts_xdconv = self.xdconvs[layer_idx](pts, fts, qrs)
+
+                fts_xdconv = self.xdconvs._children[layer_idx](pts, fts, qrs)
                 fts_concat = F.concat(fts_xdconv, fts_qrs, dim=-1)
-                fts_fuse = self.fuse_fcs[layer_idx](fts_concat)
+                fts_fuse = self.fuse_fcs._children[layer_idx](fts_concat)
                 layer_pts.append(qrs)
                 layer_fts.append(fts_fuse)
         logits = self.fcs(layer_fts[-1])
 
         return logits
 
-PointCNNLoss = gluon.loss.SoftmaxCrossEntropyLoss(axis=-1)
+if __name__ == "__main__":
+    pass
+    # from dotdict import DotDict
+    # setting = DotDict()
 
-def get_loss_sym(probs, labels):
-    sm = PointCNNLoss(probs, labels)
-    sm = mx.sym.make_loss(sm, name="softmax")
-    res = mx.sym.Group([mx.sym.BlockGrad(probs, name="blockgrad"), sm])
-    return res
+    # setting.num_class = 8
+
+    # setting.sample_num = 4096
+
+    # setting.batch_size = 12
+
+    # setting.num_epochs = 1024
+
+    # setting.jitter = 0.001
+    # setting.jitter_val = 0.0
+
+    # setting.rotation_range = [0,  0, 0,'g']
+    # setting.rotation_range_val = [0, 0, 0, 'u']
+
+    # setting.order = 'rxyz'
+
+    # setting.scaling_range = [0.1, 0.1, 0.1, 'g']
+    # setting.scaling_range_val = [0, 0, 0, 'u']
+
+    # x = 8
+
+    # # K, D, P, C
+    # setting.xconv_params = [(8, 1, -1, 32 * x),
+    #                 (12, 2, 768, 32 * x),
+    #                 (16, 2, 384, 64 * x),
+    #                 (16, 6, 128, 128 * x)]
+
+    # # K, D, pts_layer_idx, qrs_layer_idx
+    # setting.xdconv_params = [(16, 6, 3, 2),
+    #                 (12, 4, 2, 1),
+    #                 (8, 4, 1, 0)]
+
+    # # C, dropout_rate
+    # setting.fc_params = [(32 * x, 0.5), (32 * x, 0.5)]
+
+    # setting.with_fps = True
+
+    # setting.data_dim = 3
+
+    # # changed
+    # setting.use_extra_features = False
+    # # changed
+    # setting.with_normal_feature = False
+    # setting.with_X_transformation = True
+    # setting.sorting_method = None
+
+    # setting.keep_remainder = True
+
+    # net = PointCNN(setting, 'segmentation', with_feature=False, prefix="PointCNN_")
+
+    # net.collect_params().initialize()
+
+    # a = nd.random.uniform(shape=(1, 4096, 3), ctx=mx.cpu())
+    
+    # b = net(a)
+
+    # print(b.shape)

@@ -150,7 +150,8 @@ class SampleIter(DataIter):
         sample_num_train = self.setting.sample_num + offset
 
         l = [self.idx[_] for _ in l] if self.shuffle else l
-        data_pad = self.data_pad[l]
+
+        data_pad = self.data_pad[l] if isinstance(self.data_pad, np.ndarray) else self.data_pad    
         indices = get_indices(self.batch_size, sample_num_train, data_pad)
         indices_nd = nd.array(indices, dtype=np.int32)
 
@@ -158,7 +159,8 @@ class SampleIter(DataIter):
         self.indices_nd = indices_nd
 
     def getdata(self):
-        dat = self.data[self.prepare_list,:,:]
+        dat = self.data[self.prepare_list,:,:self.setting.data_dim]
+
         points_sampled = nd.gather_nd(array(dat), indices=self.indices_nd)
 
         xforms_np, rotations_np = get_xforms(self.batch_size, scaling_range=self.setting.scaling_range
@@ -168,9 +170,13 @@ class SampleIter(DataIter):
         return [points_augmented]
 
     def getlabel(self):
-        label = self.label[self.prepare_list,:]
-        labels_sampled = nd.gather_nd(array(label), indices=self.indices_nd)
-        return [labels_sampled]
+        if len(self.label.shape) == 2:
+            label = self.label[self.prepare_list,:]
+            labels_sampled = nd.gather_nd(array(label), indices=self.indices_nd)
+            return [labels_sampled]
+        else:
+            label = self.label[self.prepare_list]
+            return [label]
 
     def getpad(self):
         if self.last_batch_handle == 'pad' and \

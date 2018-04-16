@@ -23,7 +23,7 @@ from mxutils import get_shape
 from sampleiter import SampleIter
 from pointcnn import PointCNN, custom_metric
 
-from kktools.utils import statparams
+# from kktools.utils import statparams
 
 ########################### Settings ###############################
 setting = DotDict()
@@ -79,16 +79,12 @@ setting.sorting_method = None
 setting.keep_remainder = True
 ###################################################################
 
-#data_train, _ , data_num_train, label_train = data_utils.load_seg('/train_files.txt')
-#data_val, _ , data_num_val, label_val = data_utils.load_seg('/train_files.txt')
 data_train, _ , data_num_train, label_train = data_utils.load_seg('/mnt/15F1B72E1A7798FD/Dataset/point_cnn/label_las/train/2h5/train_files.txt')
 data_val, _ , data_num_val, label_val = data_utils.load_seg('/mnt/15F1B72E1A7798FD/Dataset/point_cnn/label_las/val/h5/train_files.txt')
 
 nd_iter = SampleIter(setting=setting, data=data_train, label=label_train, data_pad=data_num_train, batch_size=setting.batch_size, shuffle=True)
 # nd_iter_val = SampleIter(setting=setting, data=data_val, label=label_val, data_pad=data_num_val, batch_size=setting.batch_size)
 
-# for batch in nd_iter:
-#     print(batch)
 
 num_train = data_train.shape[0]
 point_num = data_train.shape[1]
@@ -113,19 +109,11 @@ probs_shape = get_shape(probs)
 label_var = mx.sym.var('softmax_label', shape=(batch_size_train // len(ctx), probs_shape[1]))
 loss = mx.sym.SoftmaxOutput(probs, label_var, preserve_shape=True, normalization='valid')
 
-# paramscount = statparams(loss, data=(batch_size_train // len(ctx), sym_max_points, 3)
-#     , softmax_label = (batch_size_train // len(ctx), probs_shape[1]))
-# print(paramscount)
-
-#mx.viz.print_summary(probs, shape={'data':(batch_size_train // len(ctx), sym_max_points, 3)})
-#mx.viz.plot_network(probs).view()
-
 mod = mx.mod.Module(loss, data_names=['data'], label_names=['softmax_label'], context=ctx)
 mod.bind(data_shapes=[('data',(batch_size_train, sym_max_points, 3))]
          , label_shapes=[('softmax_label',(batch_size_train, probs_shape[1]))])
 
 mod.init_params(initializer=mx.init.Uniform(0.08))
-# mod.init_params(initializer=mx.init.Xavier())
 
 lr_sched = mx.lr_scheduler.MultiFactorScheduler([ 200,  400,  600,  800, 1000], 0.33)
 mod.init_optimizer(optimizer='sgd', optimizer_params={'learning_rate':0.4 , 'momentum': 0.9
@@ -212,10 +200,9 @@ for i in range(160):
 
         points = batch.data[0]
         label = batch.label[0]
+        reshape_mod(mod, (batch_size_train, points.shape[1], 3), ctx)
 
         nb = mx.io.DataBatch(data=[points], label=[label], pad=nd_iter.getpad(), index=None)
-
-        reshape_mod(mod, (batch_size_train, points.shape[1], 3), ctx)
 
         mod.forward(nb, is_train=True)
         #mod.update_metric(metric1, nb.label)

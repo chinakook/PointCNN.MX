@@ -23,18 +23,16 @@ from mxutils import get_shape
 from sampleiter import SampleIter
 from pointcnn import PointCNN, custom_metric
 
-
-
 from kktools.utils import statparams
 
 ########################### Settings ###############################
 setting = DotDict()
 
-setting.num_class = 8
+setting.num_class = 2
 
 setting.sample_num = 4096
 
-setting.batch_size = 12
+setting.batch_size = 8
 
 setting.num_epochs = 1024
 
@@ -46,7 +44,7 @@ setting.rotation_range_val = [0, 0, 0, 'u']
 
 setting.order = 'rxyz'
 
-setting.scaling_range = [0.1, 0.1, 0.1, 'g']
+setting.scaling_range = [0, 0, 0, 'g']
 setting.scaling_range_val = [0, 0, 0, 'u']
 
 x = 8
@@ -83,11 +81,11 @@ setting.keep_remainder = True
 
 #data_train, _ , data_num_train, label_train = data_utils.load_seg('/train_files.txt')
 #data_val, _ , data_num_val, label_val = data_utils.load_seg('/train_files.txt')
-data_train, _ , data_num_train, label_train = data_utils.load_seg('/mnt/15F1B72E1A7798FD/Dataset/point_cnn/label_las/train/split_h5/train_files.txt')
-data_val, _ , data_num_val, label_val = data_utils.load_seg('/mnt/15F1B72E1A7798FD/Dataset/point_cnn/label_las/val/split_h5/train_files.txt')
+data_train, _ , data_num_train, label_train = data_utils.load_seg('/mnt/15F1B72E1A7798FD/Dataset/point_cnn/label_las/train/2h5/train_files.txt')
+data_val, _ , data_num_val, label_val = data_utils.load_seg('/mnt/15F1B72E1A7798FD/Dataset/point_cnn/label_las/val/h5/train_files.txt')
 
 nd_iter = SampleIter(setting=setting, data=data_train, label=label_train, data_pad=data_num_train, batch_size=setting.batch_size, shuffle=True)
-nd_iter_val = SampleIter(setting=setting, data=data_val, label=label_val, data_pad=data_num_val, batch_size=setting.batch_size)
+# nd_iter_val = SampleIter(setting=setting, data=data_val, label=label_val, data_pad=data_num_val, batch_size=setting.batch_size)
 
 # for batch in nd_iter:
 #     print(batch)
@@ -126,11 +124,12 @@ mod = mx.mod.Module(loss, data_names=['data'], label_names=['softmax_label'], co
 mod.bind(data_shapes=[('data',(batch_size_train, sym_max_points, 3))]
          , label_shapes=[('softmax_label',(batch_size_train, probs_shape[1]))])
 
-mod.init_params(initializer=mx.init.Uniform())
+mod.init_params(initializer=mx.init.Uniform(0.08))
+# mod.init_params(initializer=mx.init.Xavier())
 
-lr_sched = mx.lr_scheduler.MultiFactorScheduler([100, 200, 300, 400, 500, 600, 700, 800], 0.33)
-mod.init_optimizer(optimizer='sgd', optimizer_params={'learning_rate':0.2 , 'momentum': 0.9
-    , 'wd' : 0.0001, 'lr_scheduler': lr_sched, 'clip_gradient': None})#, 'rescale_grad': 1.0 / len(ctx) if len(ctx) > 0 else 1.0})
+lr_sched = mx.lr_scheduler.MultiFactorScheduler([ 200,  400,  600,  800, 1000], 0.33)
+mod.init_optimizer(optimizer='sgd', optimizer_params={'learning_rate':0.4 , 'momentum': 0.9
+    , 'wd' : 0.0001, 'lr_scheduler': lr_sched, 'clip_gradient': None, 'rescale_grad': 1.0 / len(ctx) if len(ctx) > 0 else 1.0})
 
 def reshape_mod(mod, shape, ctx):
     var = mx.sym.var('data', shape=(shape[0] // len(ctx), shape[1], shape[2]))
@@ -146,7 +145,6 @@ def reshape_mod(mod, shape, ctx):
     mod.bind(data_shapes=[('data', shape)]
                 , label_shapes=[('softmax_label',(batch_size_train, probs_shape[1]))], shared_module=mod
             )
-    return mod
 
 def val_batch(mod,nd_iter_val,setting):
     num_val = (nd_iter_val.data[0][1]).shape[0]
@@ -154,13 +152,8 @@ def val_batch(mod,nd_iter_val,setting):
     val_point_num = data_val.shape[1]
     iter_size = int(math.ceil(val_point_num*1.0/setting.sample_num))
     
-    var = mx.sym.var('data', shape=(iter_size//len(ctx), setting.sample_num, 3))
-    probs = net(var)
 
-    probs_shape = get_shape(probs)
-    mod._symbol = probs
-    mod.binded = False
-    mod.bind(data_shapes=[('data',(iter_size//len(ctx), setting.sample_num, 3))], label_shapes=None, shared_module=mod)
+    reshape_mod(mod, (iter_size//len(ctx), setting.sample_num, 3), ctx)
     
     indices_batch_indices = np.tile(np.reshape(np.arange(iter_size), (iter_size, 1, 1)), (1, setting.sample_num, 1))
     
@@ -212,7 +205,7 @@ def val_batch(mod,nd_iter_val,setting):
 
 #profiler.set_state('run')
 iter_num = 0
-for i in range(50):
+for i in range(160):
     nd_iter.reset()
     for ibatch, batch in enumerate(nd_iter):
         t0 = time.time()
@@ -222,7 +215,7 @@ for i in range(50):
 
         nb = mx.io.DataBatch(data=[points], label=[label], pad=nd_iter.getpad(), index=None)
 
-        mod = reshape_mod(mod, (batch_size_train, points.shape[1], 3), ctx)
+        reshape_mod(mod, (batch_size_train, points.shape[1], 3), ctx)
 
         mod.forward(nb, is_train=True)
         #mod.update_metric(metric1, nb.label)
@@ -239,6 +232,6 @@ for i in range(50):
     #     print("Epoch %d: val_mean_acc  %f" %(i,mean_acc))
 
 
-mod = reshape_mod(mod, (1, setting.sample_num, 3), [mx.gpu(0)])
+reshape_mod(mod, (batch_size_train, setting.sample_num, 3), ctx)
 
-mod.save_checkpoint("p_seg", 400)
+mod.save_checkpoint("p_seg", 402)

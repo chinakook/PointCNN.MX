@@ -74,12 +74,12 @@ def get_xforms(xform_num, rotation_range=(0, 0, 0, 'u'), scaling_range=(0.0, 0.0
     return xforms, rotations
 
 def augment(points, xforms, r=None):
-    points_xformed = nd.batch_dot(points, xforms, name='points_xformed')
+    points_xformed = nd.batch_dot(points, xforms)
     if r is None:
         return points_xformed
 
     jitter_data = r * mx.random.normal(shape=points_xformed.shape)
-    jitter_clipped = nd.clip(jitter_data, -5 * r, 5 * r, name='jitter_clipped')
+    jitter_clipped = nd.clip(jitter_data, -5 * r, 5 * r)
     return points_xformed + jitter_clipped
 
 class SampleIter(DataIter):
@@ -112,23 +112,6 @@ class SampleIter(DataIter):
         self.cursor = -batch_size
         self.batch_size = batch_size
         self.last_batch_handle = last_batch_handle
-
-    #     self.datadesc = mx.io.DataDesc('data', (self.batch_size, self.max_point_num, self.feat_dim))
-    #     self.labeldesc = mx.io.DataDesc('softmax_label', (self.batch_size, self.max_point_num))
-
-    # @property
-    # def provide_data(self):
-    #     """The name and shape of data provided by this iterator."""
-    #     return [
-    #         self.datadesc
-    #     ]
-
-    # @property
-    # def provide_label(self):
-    #     """The name and shape of label provided by this iterator."""
-    #     return [
-    #         self.labeldesc
-    #     ]
 
     def hard_reset(self):
         """Ignore roll over data and set to start."""
@@ -178,7 +161,8 @@ class SampleIter(DataIter):
         dat = self.data[self.prepare_list,:,:]
         points_sampled = nd.gather_nd(array(dat), indices=self.indices_nd)
 
-        xforms_np, rotations_np = get_xforms(self.batch_size)
+        xforms_np, rotations_np = get_xforms(self.batch_size, scaling_range=self.setting.scaling_range
+            , rotation_range=self.setting.rotation_range)
         points_xformed = nd.batch_dot(points_sampled, nd.array(xforms_np))
         points_augmented = augment(points_xformed, nd.array(xforms_np), self.setting.jitter)
         return [points_augmented]

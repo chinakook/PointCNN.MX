@@ -60,17 +60,17 @@ class GatherPoint(mx.operator.CustomOp):
         self.assign(out_data[0], req[0], y)
 
     def backward(self, req, out_grad, in_data, out_data, in_grad, aux):
-        #if req[0] == "null":
-        #    return
+        if req[0] == "null" or req[0] != 'write':
+            return
         #print(in_data[0].shape)
-        print("BACK")
+        #print("BACK")
         B, N, _ = in_data[0].shape
         _, M = in_data[1].shape
-        dx = mx.nd.zeros(shape=in_data[0].shape, ctx = in_data[0].context, dtype=np.float32)
+        #dx = mx.nd.zeros(shape=in_data[0].shape, ctx = in_data[0].context, dtype=np.float32)
 
-        bwd_kernel.launch([B, N, M, out_grad[0], in_data[1], dx], in_data[0].context, (2, 8, 1), (512, 1, 1))
+        bwd_kernel.launch([B, N, M, out_grad[0], in_data[1], in_grad[0]], in_data[0].context, (2, 8, 1), (512, 1, 1))
         #print(req[0], req[1])
-        self.assign(in_grad[0], req[0], dx)
+        #self.assign(in_grad[0], req[0], dx)
         self.assign(in_grad[1], req[1], 0)
 
 @mx.operator.register("GatherPoint")

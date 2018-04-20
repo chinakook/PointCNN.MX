@@ -102,7 +102,7 @@ mod = mx.mod.Module(loss, data_names=['data'], label_names=['softmax_label'], co
 mod.bind(data_shapes=[('data',(batch_size_train, sym_max_points, 3))]
          , label_shapes=[('softmax_label',(batch_size_train, probs_shape[1]))])
 
-mod.init_params(initializer=mx.init.Uniform(0.08))
+mod.init_params(initializer=mx.init.Xavier())
 
 #lr_sched = mx.lr_scheduler.MultiFactorScheduler([ 200,  400,  600,  800, 1000], 0.33)
 mod.init_optimizer(optimizer='sgd', optimizer_params={'learning_rate':0.4 , 'momentum': 0.9

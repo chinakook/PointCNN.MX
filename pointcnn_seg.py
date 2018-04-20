@@ -60,7 +60,9 @@ setting.xdconv_params =  [(16, 6, 3, 2),
                  (12, 6, 2, 1),
                  (8, 6, 1, 0),
                  (8, 4, 0, 0)]
-
+# setting.xdconv_params =  [(16, 6, 3, 2),
+#                  (12, 4, 2, 1),
+#                  (8, 4, 1, 0)]
 
 # C, dropout_rate
 setting.fc_params = [(32 * x, 0.5), (32 * x, 0.5)]

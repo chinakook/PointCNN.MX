@@ -350,7 +350,7 @@ class PointCNN(nn.HybridBlock):
             if with_feature:
                 C_fts = self.xconv_params[0][-1] // 2
                 self.dense0 = DENSE(C_fts)
-            self.xconvs = nn.HybridBlock()
+            self.xconvs = nn.HybridSequential()
             for layer_idx, layer_param in enumerate(self.xconv_params):
                 K, D, P, C = layer_param
 
@@ -364,11 +364,11 @@ class PointCNN(nn.HybridBlock):
                     depth_multiplier = math.ceil(C / C_prev)
                 xc = xconv(K, D, P, C, C_pts_fts, C_prev, self.with_X_transformation,
                            depth_multiplier, self.sorting_method, prefix="xconv{}_".format(layer_idx+1) )
-                self.xconvs.register_child(xc)
+                self.xconvs.add(xc)
                 
             if self.task == 'segmentation':
-                self.xdconvs = nn.HybridBlock()
-                self.fuse_fcs = nn.HybridBlock(prefix="fts_fuse_")
+                self.xdconvs = nn.HybridSequential()
+                self.fuse_fcs = nn.HybridSequential(prefix="fts_fuse_")
                 for layer_idx, layer_param in enumerate(self.xdconv_params):
                     K, D, pts_layer_idx, qrs_layer_idx = layer_param
 
@@ -378,9 +378,9 @@ class PointCNN(nn.HybridBlock):
                     depth_multiplier = 1
                     xdc = xconv(K, D, P, C, C_pts_fts, C_prev, self.with_X_transformation,
                                 depth_multiplier, self.sorting_method, prefix="xdconv{}_".format(layer_idx+1) )
-                    self.xdconvs.register_child(xdc)
+                    self.xdconvs.add(xdc)
                     with self.fuse_fcs.name_scope():
-                        self.fuse_fcs.register_child(DENSE(C))
+                        self.fuse_fcs.add(DENSE(C))
 
             self.fcs = nn.HybridSequential(prefix="fc_")
             with self.fcs.name_scope():       
@@ -404,13 +404,14 @@ class PointCNN(nn.HybridBlock):
                 qrs = layer_pts[-1]
             else:
                 if self.with_fps:
-                    idx = F.Custom(pts, op_type='FarthestPointSampling', npoints=P)
-                    qrs = F.Custom(*[pts, idx], op_type='GatherPoint')
+                    idx = F.Custom(pts, op_type='FarthestPointSampling', name='fps_{}'.format(layer_idx), npoints=P)
+                    # qrs = F.Custom(*[pts, idx], name='fps_gather_{}'.format(layer_idx), op_type='GatherPoint')
+                    qrs = F.Custom(data=pts, idx=idx, name='fps_gather_{}'.format(layer_idx), op_type='GatherPoint')
                 else:
                     qrs = F.slice(pts, begin=(0, 0, 0), end=(None, P, None))  # (N, P, 3)
             layer_pts.append(qrs)
             
-            fts_xconv = self.xconvs._children[layer_idx](pts, fts, qrs)
+            fts_xconv = self.xconvs[layer_idx](pts, fts, qrs)
             layer_fts.append(fts_xconv)
             
         if self.task == 'segmentation':
@@ -422,9 +423,9 @@ class PointCNN(nn.HybridBlock):
                 qrs = layer_pts[qrs_layer_idx + 1]
                 fts_qrs = layer_fts[qrs_layer_idx + 1]
 
-                fts_xdconv = self.xdconvs._children[layer_idx](pts, fts, qrs)
+                fts_xdconv = self.xdconvs[layer_idx](pts, fts, qrs)
                 fts_concat = F.concat(fts_xdconv, fts_qrs, dim=-1)
-                fts_fuse = self.fuse_fcs._children[layer_idx](fts_concat)
+                fts_fuse = self.fuse_fcs[layer_idx](fts_concat)
                 layer_pts.append(qrs)
                 layer_fts.append(fts_fuse)
         logits = self.fcs(layer_fts[-1])
@@ -433,3 +434,4 @@ class PointCNN(nn.HybridBlock):
 
 if __name__ == "__main__":
     pass
+    #gluon.model_zoo.vision.resnet18_v2()

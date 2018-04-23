@@ -223,4 +223,4 @@ for i in range(160):
 
 reshape_mod(mod, (batch_size_train, setting.sample_num, 3), ctx)
 
-mod.save_checkpoint("p_seg", 402)
+mod.save_checkpoint("p_seg", 404)

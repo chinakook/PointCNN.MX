@@ -42,9 +42,9 @@ bwd_module = mx.rtc.CudaModule(bwd_source, exports=['scatteraddpointKernel'])
 bwd_kernel = bwd_module.get_kernel("scatteraddpointKernel"
                                         , "int b,int n,int m,const float * out_g,const int * idx,float * inp_g")
 
-class GatherPoint(mx.operator.CustomOp):
+class GatherPointPy(mx.operator.CustomOp):
     def __init__(self):
-        super(GatherPoint, self).__init__()
+        super(GatherPointPy, self).__init__()
 
     def forward(self, is_train, req, in_data, out_data, aux):
         if req[0] == "null":
@@ -62,21 +62,17 @@ class GatherPoint(mx.operator.CustomOp):
     def backward(self, req, out_grad, in_data, out_data, in_grad, aux):
         if req[0] == "null" or req[0] != 'write':
             return
-        #print(in_data[0].shape)
-        #print("BACK")
         B, N, _ = in_data[0].shape
         _, M = in_data[1].shape
-        #dx = mx.nd.zeros(shape=in_data[0].shape, ctx = in_data[0].context, dtype=np.float32)
 
         bwd_kernel.launch([B, N, M, out_grad[0], in_data[1], in_grad[0]], in_data[0].context, (2, 8, 1), (512, 1, 1))
-        #print(req[0], req[1])
-        #self.assign(in_grad[0], req[0], dx)
+
         self.assign(in_grad[1], req[1], 0)
 
-@mx.operator.register("GatherPoint")
-class GatherPointProp(mx.operator.CustomOpProp):
+@mx.operator.register("GatherPointPy")
+class GatherPointPyProp(mx.operator.CustomOpProp):
     def __init__(self):
-        super(GatherPointProp, self).__init__(need_top_grad=True)
+        super(GatherPointPyProp, self).__init__(need_top_grad=True)
 
     def list_arguments(self):
         return ['data', 'idx']
@@ -92,7 +88,7 @@ class GatherPointProp(mx.operator.CustomOpProp):
         return in_type, [np.float32], []
 
     def create_operator(self, ctx, in_shapes, in_dtypes):
-        return GatherPoint()
+        return GatherPointPy()
 
     #def declare_backward_dependency(self, out_grad, in_data, out_data):
     #    return [out_grad[0]]
@@ -172,33 +168,29 @@ source = r'''
 module = mx.rtc.CudaModule(source, exports=['farthestpointsamplingKernel'])
 kernel = module.get_kernel("farthestpointsamplingKernel", "int b,int n,int m,const float * dataset,float * temp,int * idxs")
 
-class FarthestPointSampling(mx.operator.CustomOp):
+class FarthestPointSamplingPy(mx.operator.CustomOp):
     def __init__(self, npoints):
-        super(FarthestPointSampling, self).__init__()
+        super(FarthestPointSamplingPy, self).__init__()
         self.npoints = npoints
     def forward(self, is_train, req, in_data, out_data, aux):
-        if req[0] == "null":
+        if req[0] == "null" or req[0] != 'write':
             return
         x = in_data[0]  # input
         B, N, _ = x.shape
-        tmp = mx.nd.ones(shape=(B, N), ctx = x.context) * 1e10
-        y = mx.nd.empty(shape=(B, self.npoints), ctx = x.context, dtype=np.int32) # output
+        tmp = mx.nd.empty(shape=(32, N), ctx = x.context)
 
         # args, ctx, grid_shape, block_shape, shared_mem = 0
-        kernel.launch([B, N, self.npoints, x, tmp, y], x.context, (32, 1, 1), (512, 1, 1))
-
-        self.assign(out_data[0], req[0], y)
+        kernel.launch([B, N, self.npoints, x, tmp, out_data[0]], x.context, (32, 1, 1), (512, 1, 1))
 
     def backward(self, req, out_grad, in_data, out_data, in_grad, aux):
-        #print("BACK")
         if req[0] == "null":
             return
         self.assign(in_grad[0], req[0], 0)
 
-@mx.operator.register("FarthestPointSampling")
-class FarthestPointSamplingProp(mx.operator.CustomOpProp):
+@mx.operator.register("FarthestPointSamplingPy")
+class FarthestPointSamplingPyProp(mx.operator.CustomOpProp):
     def __init__(self, npoints=0):
-        super(FarthestPointSamplingProp, self).__init__(need_top_grad=True)
+        super(FarthestPointSamplingPyProp, self).__init__(need_top_grad=True)
         
         self.npoints = int(npoints)
 
@@ -216,57 +208,37 @@ class FarthestPointSamplingProp(mx.operator.CustomOpProp):
     def infer_type(self, in_type):
         return in_type, [np.int32], []
 
-    # def infer_storage_type(self, in_stype):
-    #     '''Infer storage type logic for the forward pass
-    #     Takes a list of storage types for inputs
-    #     Returns three lists lists, one for input storage types inferred,
-    #     second for output storage types inferred and third for aux storage
-    #     types inferred
-    #     The in_stype is the list containing storage type for inputs
-    #     If the input is a dense ndarray then we infer the input
-    #     and output to be dense. If input is csr then input and output
-    #     are inferred as csr.
-    #     '''
-    #     #if in_stype[0] == 'default':
-    #     #print(in_stype)
-    #     return in_stype, ['default'], []
-
-    # def infer_storage_type_backward(self, ograd_stype, in_stype, out_stype, igrad_stype, aux_stype):
-    #     '''Infer storage type logic for the backward pass
-    #     Takes storage type of output gradients(ograd_stype), inputs(in_stype),
-    #     outputs(out_stype) and aux(aux_stype).
-    #     Returns inferred storage types in the following order:
-    #     ograd_stype, in_stype, out_stype, igrad_stype (Storage type for input gradients)
-    #     and aux_stype.
-    #     '''
-    #     #if in_stype[0] == 'default':
-    #     #print(ograd_stype, in_stype, out_stype, igrad_stype)
-    #     return ['default'], ['default'], ['default'], ['default'], []
-
     def create_operator(self, ctx, in_shapes, in_dtypes):
-        return FarthestPointSampling(self.npoints)
+        return FarthestPointSamplingPy(self.npoints)
 
 
 if __name__ == "__main__":
     
     pts = mx.nd.random.uniform(shape=(2,18,3), ctx=mx.gpu(0))
+
+    idx = mx.nd.contrib.FarthestPointSampling(pts, npoints=8)
+    idx2 = mx.nd.Custom(pts, op_type='FarthestPointSamplingPy', name='idx', npoints=8)
+    print(idx)
+    print(idx2)
     # idx = mx.nd.array([[0, 3],[1, 5]], dtype=np.int32, ctx=mx.gpu(0))
     pts_d = mx.nd.ones(shape=pts.shape, ctx=mx.gpu(0))
     #idx_d = mx.nd.ones(shape=(2,2,3), ctx=mx.gpu(0))
 
     var_p = mx.sym.Variable("pts", shape=(2,18,3))
     # var_i = mx.sym.Variable("idx")
-    var_i = mx.sym.Custom(var_p, op_type='FarthestPointSampling', name='idx', npoints=2)
-    var_i = mx.sym.BlockGrad(var_i)
-    #out = mx.sym.Custom(*[var_p, var_i], op_type='GatherPoint', name='rts')
-    out = mx.sym.Custom(data=var_p, idx=var_i, op_type='GatherPoint', name='rts')
+    #var_i = mx.sym.Custom(var_p, op_type='FarthestPointSampling', name='idx', npoints=2)
+    var_i = mx.sym.contrib.FarthestPointSampling(var_p, npoints=8)
 
+    #var_i = mx.sym.BlockGrad(var_i)
+    #out = mx.sym.Custom(*[var_p, var_i], op_type='GatherPointPy', name='rts')
+    #out = mx.sym.Custom(data=var_p, idx=var_i, op_type='GatherPointPy', name='rts')
+    out = mx.sym.contrib.GatherPoint(data=var_p, idx=var_i)
     #exec_ = out.bind(mx.gpu(0), {'pts':pts, 'idx':idx}, args_grad={'pts': d})
     
     exec_ = out.bind(mx.gpu(0), {'pts':pts}, args_grad={'pts': pts_d})#, 'idx':idx_d})
     
     exec_.forward(is_train=True)
     print(exec_.outputs[0].asnumpy())
-    exec_.backward(out_grads=mx.nd.ones(shape=(2,2,3), ctx=mx.gpu(0)))
+    exec_.backward(out_grads=mx.nd.ones(shape=(2,8,3), ctx=mx.gpu(0)))
     #exec_.backward(out_grads=None)
     print(exec_.grad_arrays)

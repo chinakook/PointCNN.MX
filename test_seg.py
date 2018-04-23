@@ -409,7 +409,7 @@ def main():
     #Leng = 1
     ctx = [mx.gpu(1)]
 
-    sym, arg_params, aux_params = mx.model.load_checkpoint('/home/dingkou/dev/PointCNN.MX/p_seg',402)
+    sym, arg_params, aux_params = mx.model.load_checkpoint('/home/dingkou/dev/PointCNN.MX/p_seg',403)
     all_layers = sym[0].get_internals()
     new_sym = mx.sym.softmax(all_layers['fc_dense5_fwd_output'], axis=-1)
 

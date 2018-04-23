@@ -13,7 +13,7 @@ import mxnet.gluon.nn as nn
 from mxnet.gluon.data import Dataset, DataLoader
 
 from mxutils import MyConstant, get_shape
-from fpsop import *
+# from fpsop import *
 
 class BN(nn.HybridBlock):
     def __init__(self):
@@ -404,9 +404,11 @@ class PointCNN(nn.HybridBlock):
                 qrs = layer_pts[-1]
             else:
                 if self.with_fps:
-                    idx = F.Custom(pts, op_type='FarthestPointSampling', name='fps_{}'.format(layer_idx), npoints=P)
+                    #idx = F.Custom(pts, op_type='FarthestPointSampling', name='fps_{}'.format(layer_idx), npoints=P)
+                    idx = F.contrib.FarthestPointSampling(pts, npoints=P, name='fps_{}'.format(layer_idx))
                     # qrs = F.Custom(*[pts, idx], name='fps_gather_{}'.format(layer_idx), op_type='GatherPoint')
-                    qrs = F.Custom(data=pts, idx=idx, name='fps_gather_{}'.format(layer_idx), op_type='GatherPoint')
+                    # qrs = F.Custom(data=pts, idx=idx, name='fps_gather_{}'.format(layer_idx), op_type='GatherPoint')
+                    qrs = F.contrib.GatherPoint(pts, idx, name='fps_gather_{}'.format(layer_idx))
                 else:
                     qrs = F.slice(pts, begin=(0, 0, 0), end=(None, P, None))  # (N, P, 3)
             layer_pts.append(qrs)

@@ -104,16 +104,27 @@ net.hybridize()
 
 sym_max_points = max(data_train.shape[1], data_val.shape[1])
 
-var = mx.sym.var('data', shape=(batch_size_train // len(ctx), sym_max_points, 3))
-probs = net(var)
+def gen_sym0(npoints):
+    var = mx.sym.var('data', shape=(batch_size_train // len(ctx), npoints, 3))
 
-probs_shape = get_shape(probs)
-label_var = mx.sym.var('softmax_label', shape=(batch_size_train // len(ctx), probs_shape[1]))
-loss = mx.sym.SoftmaxOutput(probs, label_var, preserve_shape=True, normalization='valid')
+    probs = net(var)
+    probs_shape = get_shape(probs)
+    label_var = mx.sym.var('softmax_label')
 
-mod = mx.mod.Module(loss, data_names=['data'], label_names=['softmax_label'], context=ctx)
+    loss = mx.sym.SoftmaxOutput(probs, label_var, preserve_shape=True, normalization='valid')
+
+    return loss, ['data'], ['softmax_label'], probs_shape
+
+def gen_sym(npoints):
+    sym, data_names, label_names, _ = gen_sym0(npoints)
+    return sym, data_names, label_names
+
+_,_,_, probs_shape = gen_sym0(sym_max_points)
+
+
+mod = mx.mod.BucketingModule(gen_sym, default_bucket_key=sym_max_points, context=ctx)
 mod.bind(data_shapes=[('data',(batch_size_train, sym_max_points, 3))]
-         , label_shapes=[('softmax_label',(batch_size_train, probs_shape[1]))])
+        , label_shapes=[('softmax_label', (batch_size_train, probs_shape[1]))])
 
 mod.init_params(initializer=mx.init.Uniform(0.08))
 
@@ -121,20 +132,6 @@ lr_sched = mx.lr_scheduler.MultiFactorScheduler([ 200,  400,  600,  800, 1000], 
 mod.init_optimizer(optimizer='sgd', optimizer_params={'learning_rate':0.4 , 'momentum': 0.9
     , 'wd' : 0.0001, 'lr_scheduler': lr_sched, 'clip_gradient': None, 'rescale_grad': 1.0 / len(ctx) if len(ctx) > 0 else 1.0})
 
-def reshape_mod(mod, shape, ctx):
-    var = mx.sym.var('data', shape=(shape[0] // len(ctx), shape[1], shape[2]))
-    probs = net(var)
-    probs_shape = get_shape(probs)
-    label_var = mx.sym.var('softmax_label', shape=(shape[0] // len(ctx), probs_shape[1]))
-
-    loss = mx.sym.SoftmaxOutput(probs, label_var, preserve_shape=True, normalization='valid')
-
-    mod._symbol = loss
-    mod.binded=False
-
-    mod.bind(data_shapes=[('data', shape)]
-                , label_shapes=[('softmax_label',(batch_size_train, probs_shape[1]))], shared_module=mod
-            )
 
 def val_batch(mod,nd_iter_val,setting):
     num_val = (nd_iter_val.data[0][1]).shape[0]
@@ -143,7 +140,7 @@ def val_batch(mod,nd_iter_val,setting):
     iter_size = int(math.ceil(val_point_num*1.0/setting.sample_num))
     
 
-    reshape_mod(mod, (iter_size//len(ctx), setting.sample_num, 3), ctx)
+    # reshape_mod(mod, (iter_size//len(ctx), setting.sample_num, 3), ctx)
     
     indices_batch_indices = np.tile(np.reshape(np.arange(iter_size), (iter_size, 1, 1)), (1, setting.sample_num, 1))
     
@@ -174,9 +171,9 @@ def val_batch(mod,nd_iter_val,setting):
 
         data_in = nd.gather_nd(data_f,indices= indices_f)        
         
-        nb = mx.io.DataBatch(data=[data_in], label=None, pad=None, index=None)    
+        nb = mx.io.DataBatch(data=[data_in], label=None, pad=None, bucket_key=data_in.shape[1], provide_data=['data', data_in.shape], index=None)    
 
-        mod.forward(nb,is_train = False)        
+        mod.forward(nb, is_train = False)        
         seg_probs = mod.get_outputs()[0].asnumpy()       
         probs_2d = np.reshape(seg_probs, (setting.sample_num * iter_size, -1))
         predictions = np.zeros(shape=(point_num,))    
@@ -202,10 +199,9 @@ for i in range(160):
 
         points = batch.data[0]
         label = batch.label[0]
-        reshape_mod(mod, (batch_size_train, points.shape[1], 3), ctx)
 
-        nb = mx.io.DataBatch(data=[points], label=[label], pad=nd_iter.getpad(), index=None)
-
+        nb = mx.io.DataBatch(data=[points], label=[label], pad=nd_iter.getpad()
+            , bucket_key=points.shape[1], provide_data=[('data',points.shape)], provide_label=[('softmax_label',label.shape)], index=None)
         mod.forward(nb, is_train=True)
         #mod.update_metric(metric1, nb.label)
         value = custom_metric(label, mod.get_outputs()[0])
@@ -221,6 +217,6 @@ for i in range(160):
     #     print("Epoch %d: val_mean_acc  %f" %(i,mean_acc))
 
 
-reshape_mod(mod, (batch_size_train, setting.sample_num, 3), ctx)
+# reshape_mod(mod, (batch_size_train, setting.sample_num, 3), ctx)
 
 mod.save_checkpoint("p_seg", 404)

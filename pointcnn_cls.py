@@ -81,17 +81,27 @@ net.hybridize()
 
 sym_max_points = point_num
 
-var = mx.sym.var('data', shape=(batch_size_train // len(ctx), sym_max_points, 3))
 
-probs = net(var)
-probs_shape = get_shape(probs)
-label_var = mx.sym.var('softmax_label', shape=(batch_size_train // len(ctx), probs_shape[1]))
+def gen_sym0(npoints):
+    var = mx.sym.var('data', shape=(batch_size_train // len(ctx), npoints, 3))
 
-loss = get_loss_sym(probs, label_var)
+    probs = net(var)
+    probs_shape = get_shape(probs)
+    label_var = mx.sym.var('softmax_label')
 
-mod = mx.mod.Module(loss, data_names=['data'], label_names=['softmax_label'], context=ctx)
+    loss = get_loss_sym(probs, label_var)
+
+    return loss, ['data'], ['softmax_label'], probs_shape
+
+def gen_sym(npoints):
+    sym, data_names, label_names, _ = gen_sym0(npoints)
+    return sym, data_names, label_names
+
+_,_,_, probs_shape = gen_sym0(sym_max_points)
+
+mod = mx.mod.BucketingModule(gen_sym, default_bucket_key=sym_max_points, context=ctx)
 mod.bind(data_shapes=[('data',(batch_size_train, sym_max_points, 3))]
-         , label_shapes=[('softmax_label',(batch_size_train, probs_shape[1]))])
+         , label_shapes=[('softmax_label', (batch_size_train, probs_shape[1]))])
 mod.init_params(initializer=mx.init.Xavier(magnitude=2.))
 
 mod.init_optimizer(optimizer='sgd', optimizer_params={'learning_rate':0.01, 'momentum': 0.9})
@@ -123,19 +133,10 @@ for i in range(400):
         points_augmented = augment(points_sampled, nd.array(xforms_np), setting.jitter)
         features_augmented = None
 
-        var = mx.sym.var('data', shape=(batch_size_train // len(ctx), sample_num_train, 3))
-        probs = net(var)
-        probs_shape = get_shape(probs)
-        loss = get_loss_sym(probs, label_var)
-
         labels_tile = nd.tile(labels_2d, (1, probs_shape[1]))
-        nb = mx.io.DataBatch(data=[points_sampled], label=[labels_tile], pad=nd_iter.getpad(), index=None)
-
-        mod._symbol = loss
-        mod.binded=False
-        mod.bind(data_shapes=[('data',(batch_size_train, sample_num_train,3))]
-                 , label_shapes=[('softmax_label',(batch_size_train, probs_shape[1]))], shared_module=mod)
-
+        nb = mx.io.DataBatch(data=[points_sampled], label=[labels_tile], pad=nd_iter.getpad()
+                             , bucket_key=sample_num_train, provide_data=[('data',points_sampled.shape)], provide_label=[('softmax_label',labels_tile.shape)], index=None)
+        
         mod.forward(nb, is_train=True)
 
         value = custom_metric(nb.label[0], mod.get_outputs()[0])

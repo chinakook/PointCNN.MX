@@ -103,8 +103,8 @@ class SampleIter(DataIter):
 
         self.num_data = data.shape[0]
         self.shuffle = shuffle
+        self.idx = list(range(0, self.num_data))
         if shuffle:
-            self.idx = list(range(0, self.num_data))
             random.shuffle(self.idx)
 
         assert self.num_data >= batch_size, \

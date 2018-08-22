@@ -213,15 +213,18 @@ class FarthestPointSamplingPyProp(mx.operator.CustomOpProp):
 
 
 if __name__ == "__main__":
-    
+    mx.random.seed(420)
+    ctx = mx.cpu()
     pts = mx.nd.random.uniform(shape=(2,18,3), ctx=mx.gpu(0))
+    pts = mx.nd.array(pts, ctx=mx.cpu())
+    #pts_cpu = mx.nd.array(pts, ctx=mx.cpu())
 
-    idx = mx.nd.contrib.FarthestPointSampling(pts, npoints=8)
-    idx2 = mx.nd.Custom(pts, op_type='FarthestPointSamplingPy', name='idx', npoints=8)
-    print(idx)
-    print(idx2)
+    #idx = mx.nd.contrib.FarthestPointSampling(pts_cpu, npoints=8)
+    #idx2 = mx.nd.Custom(pts, op_type='FarthestPointSamplingPy', name='idx', npoints=8)
+    #print(idx)
+    #print(idx2)
     # idx = mx.nd.array([[0, 3],[1, 5]], dtype=np.int32, ctx=mx.gpu(0))
-    pts_d = mx.nd.ones(shape=pts.shape, ctx=mx.gpu(0))
+    pts_d = mx.nd.ones(shape=pts.shape, ctx=ctx)
     #idx_d = mx.nd.ones(shape=(2,2,3), ctx=mx.gpu(0))
 
     var_p = mx.sym.Variable("pts", shape=(2,18,3))
@@ -235,10 +238,10 @@ if __name__ == "__main__":
     out = mx.sym.contrib.GatherPoint(data=var_p, idx=var_i)
     #exec_ = out.bind(mx.gpu(0), {'pts':pts, 'idx':idx}, args_grad={'pts': d})
     
-    exec_ = out.bind(mx.gpu(0), {'pts':pts}, args_grad={'pts': pts_d})#, 'idx':idx_d})
+    exec_ = out.bind(ctx, {'pts':pts}, args_grad={'pts': pts_d})#, 'idx':idx_d})
     
     exec_.forward(is_train=True)
     print(exec_.outputs[0].asnumpy())
-    exec_.backward(out_grads=mx.nd.ones(shape=(2,8,3), ctx=mx.gpu(0)))
+    exec_.backward(out_grads=mx.nd.ones(shape=(2,8,3), ctx=ctx))
     #exec_.backward(out_grads=None)
     print(exec_.grad_arrays)

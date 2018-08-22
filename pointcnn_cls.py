@@ -133,6 +133,7 @@ for i in range(400):
         points_augmented = augment(points_sampled, nd.array(xforms_np), setting.jitter)
         features_augmented = None
 
+        _,_,_, probs_shape = gen_sym0(sym_max_points)
         labels_tile = nd.tile(labels_2d, (1, probs_shape[1]))
         nb = mx.io.DataBatch(data=[points_sampled], label=[labels_tile], pad=nd_iter.getpad()
                              , bucket_key=sample_num_train, provide_data=[('data',points_sampled.shape)], provide_label=[('softmax_label',labels_tile.shape)], index=None)
